@@ -13,21 +13,24 @@ import yfinance as yf
 BASE_DATA_DIR = Path(r"D:\0Storage\bachelors\investment-dashboard\data")
 
 PRICE_DIR = BASE_DATA_DIR / "prices"
-INFO_DIR = BASE_DATA_DIR / "asset_info"
+INFO_DIR  = BASE_DATA_DIR / "asset_info"
 
 FORECAST_PRICE_DIR = BASE_DATA_DIR / "forecast_prices"
-FORECAST_3MO_DIR = FORECAST_PRICE_DIR / "3mo"
-FORECAST_1Y_DIR = FORECAST_PRICE_DIR / "1y"
-FORECAST_META_DIR = BASE_DATA_DIR / "forecast_meta"
+FORECAST_1MO_DIR   = FORECAST_PRICE_DIR / "1mo"   # replaces "1y"
+FORECAST_3MO_DIR   = FORECAST_PRICE_DIR / "3mo"
+FORECAST_META_DIR  = BASE_DATA_DIR / "forecast_meta"
 
 for folder in [
     PRICE_DIR,
     INFO_DIR,
+    FORECAST_1MO_DIR,
     FORECAST_3MO_DIR,
-    FORECAST_1Y_DIR,
     FORECAST_META_DIR,
 ]:
     folder.mkdir(parents=True, exist_ok=True)
+
+# Canonical set of supported horizons
+SUPPORTED_HORIZONS: frozenset[str] = frozenset({"1mo", "3mo"})
 
 
 # ============================================================
@@ -45,12 +48,9 @@ class DataManager:
 
     @staticmethod
     def _clean_price_frame(df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Normalize index, sort, and remove duplicates.
-        """
+        """Normalize index, sort, and remove duplicates."""
         if df is None or df.empty:
             return pd.DataFrame()
-
         out = df.copy()
         out.index = pd.to_datetime(out.index).tz_localize(None)
         out = out.sort_index()
@@ -70,7 +70,8 @@ class DataManager:
 
         if isinstance(frame.columns, pd.MultiIndex):
             frame.columns = [
-                "_".join([str(x) for x in col if str(x) not in {"", "nan", "None"}]).strip("_")
+                "_".join([str(x) for x in col
+                          if str(x) not in {"", "nan", "None"}]).strip("_")
                 for col in frame.columns.to_list()
             ]
 
@@ -82,7 +83,7 @@ class DataManager:
                 s = pd.to_numeric(close_obj, errors="coerce").dropna()
                 if not s.empty:
                     s.index = pd.to_datetime(s.index).tz_localize(None)
-                    s.name = "Close"
+                    s.name  = "Close"
                     return s.sort_index()
 
         close_candidates = [c for c in frame.columns if "close" in str(c).lower()]
@@ -94,60 +95,49 @@ class DataManager:
                 s = pd.to_numeric(obj, errors="coerce").dropna()
                 if not s.empty:
                     s.index = pd.to_datetime(s.index).tz_localize(None)
-                    s.name = str(col)
+                    s.name  = str(col)
                     return s.sort_index()
 
         return None
 
     @staticmethod
     def _hash_close_series(close_series: pd.Series) -> str:
-        """
-        Stable hash for current real price state.
-        Used to invalidate or refresh forecasts.
-        """
+        """Stable SHA-256 hash of a Close series.  Used to detect stale forecasts."""
         s = pd.to_numeric(close_series, errors="coerce").dropna().copy()
         s.index = pd.to_datetime(s.index).tz_localize(None)
         payload = pd.util.hash_pandas_object(s, index=True).values.tobytes()
         return hashlib.sha256(payload).hexdigest()
 
     def get_price_path(self, ticker: str) -> Path:
-        """
-        Forecast pipeline expects this method.
-        """
+        """Forecast pipeline expects this method."""
         return PRICE_DIR / f"{ticker}.parquet"
 
     def get_price_state(self, ticker: str) -> dict | None:
-        """
-        Small state snapshot used by forecast caching.
-        """
+        """Small state snapshot used by forecast caching."""
         price_path = self.get_price_path(ticker)
-
         if not price_path.exists():
             return None
-
         try:
             df = pd.read_parquet(price_path)
         except Exception:
             return None
 
-        df = self._clean_price_frame(df)
+        df    = self._clean_price_frame(df)
         close = self._extract_close_series(df)
         if close is None or close.empty:
             return None
 
         return {
-            "ticker": ticker,
-            "last_date": close.index.max(),
-            "price_hash": self._hash_close_series(close),
+            "ticker"     : ticker,
+            "last_date"  : close.index.max(),
+            "price_hash" : self._hash_close_series(close),
             "price_mtime": price_path.stat().st_mtime,
-            "price_path": str(price_path),
+            "price_path" : str(price_path),
         }
 
     @staticmethod
     def _download_history(ticker: str, start_date: str | None = None) -> pd.DataFrame:
-        """
-        Download daily history from Yahoo Finance.
-        """
+        """Download daily history from Yahoo Finance."""
         df = yf.download(
             ticker,
             start=start_date,
@@ -174,17 +164,28 @@ class DataManager:
 
     @staticmethod
     def get_forecast_path(ticker: str, horizon: str) -> Path:
+        """
+        Returns the parquet path for a forecast file.
+
+        Supported horizons
+        ------------------
+        "1mo"  →  ~1 calendar month   (21 trading days)
+        "3mo"  →  ~3 calendar months  (63 trading days)
+        """
+        if horizon == "1mo":
+            return FORECAST_1MO_DIR / f"{ticker}.parquet"
         if horizon == "3mo":
             return FORECAST_3MO_DIR / f"{ticker}.parquet"
-        if horizon == "1y":
-            return FORECAST_1Y_DIR / f"{ticker}.parquet"
-        raise ValueError("horizon must be '3mo' or '1y'")
+        raise ValueError(
+            f"horizon must be '1mo' or '3mo', got '{horizon}'"
+        )
 
     @staticmethod
     def get_forecast_meta_path(ticker: str, horizon: str) -> Path:
         return FORECAST_META_DIR / f"{ticker}_{horizon}_meta.parquet"
 
-    def save_forecast_metadata(self, ticker: str, horizon: str, metadata: dict) -> None:
+    def save_forecast_metadata(self, ticker: str, horizon: str,
+                                metadata: dict) -> None:
         path = self.get_forecast_meta_path(ticker, horizon)
         path.parent.mkdir(parents=True, exist_ok=True)
         pd.DataFrame([metadata]).to_parquet(path)
@@ -193,7 +194,6 @@ class DataManager:
         path = self.get_forecast_meta_path(ticker, horizon)
         if not path.exists():
             return None
-
         try:
             df = pd.read_parquet(path)
             if df.empty:
@@ -202,26 +202,20 @@ class DataManager:
         except Exception:
             return None
 
-    def invalidate_forecasts(self, ticker: str):
-        """
-        Delete forecast files + metadata when real data changed.
-        """
-        paths = [
-            self.get_forecast_path(ticker, "3mo"),
-            self.get_forecast_path(ticker, "1y"),
-            self.get_forecast_meta_path(ticker, "3mo"),
-            self.get_forecast_meta_path(ticker, "1y"),
-        ]
+    def invalidate_forecasts(self, ticker: str) -> None:
+        """Delete forecast files + metadata for all supported horizons."""
+        paths = []
+        for horizon in SUPPORTED_HORIZONS:
+            paths.append(self.get_forecast_path(ticker, horizon))
+            paths.append(self.get_forecast_meta_path(ticker, horizon))
 
         for path in paths:
             if path.exists():
                 path.unlink()
                 print(f"Deleted outdated forecast artifact: {path.name}")
 
-    def invalidate_all_forecasts(self, tickers: list[str]):
-        """
-        Use this when any real data changed and you want a full forecast rebuild.
-        """
+    def invalidate_all_forecasts(self, tickers: list[str]) -> None:
+        """Use when any real data changed and a full forecast rebuild is needed."""
         for ticker in tickers:
             self.invalidate_forecasts(ticker)
 
@@ -239,15 +233,12 @@ class DataManager:
         print(f"\nUpdating {ticker}...")
 
         price_path = self.get_price_path(ticker)
-        info_path = INFO_DIR / f"{ticker}_info.parquet"
+        info_path  = INFO_DIR / f"{ticker}_info.parquet"
 
         changed = False
-        prices = pd.DataFrame()
+        prices  = pd.DataFrame()
 
-        # ====================================================
-        # LOAD EXISTING DATA
-        # ====================================================
-
+        # ── Load existing data ───────────────────────────────────
         if price_path.exists():
             existing = pd.read_parquet(price_path)
             existing = self._clean_price_frame(existing)
@@ -255,7 +246,6 @@ class DataManager:
             if existing.empty:
                 print("Existing file is empty. Downloading full history...")
                 prices = self._download_full_history(ticker)
-
                 if not prices.empty:
                     prices.to_parquet(price_path)
                     changed = True
@@ -265,19 +255,17 @@ class DataManager:
 
             else:
                 last_date = existing.index.max()
-
-                # buffer is important: it re-downloads the last few days too,
-                # so missing recent rows can be recovered
                 reload_buffer_days = 14
-                start_date = (last_date - timedelta(days=reload_buffer_days)).strftime("%Y-%m-%d")
+                start_date = (
+                    last_date - timedelta(days=reload_buffer_days)
+                ).strftime("%Y-%m-%d")
 
                 print("Existing data found.")
                 print(f"Last local date: {last_date.date()}")
                 print(f"Refreshing recent window from: {start_date}")
 
                 new_data = self._download_history(
-                    ticker=ticker,
-                    start_date=start_date,
+                    ticker=ticker, start_date=start_date
                 )
 
                 if new_data.empty:
@@ -294,22 +282,16 @@ class DataManager:
                         prices = combined
                         prices.to_parquet(price_path)
                         changed = True
-
                         added_rows = max(0, len(combined) - len(existing))
                         if added_rows > 0:
                             print(f"Loaded {added_rows} new or refreshed rows.")
                         else:
                             print("Refreshed recent rows.")
 
-        # ====================================================
-        # NEW ASSET
-        # ====================================================
-
+        # ── New asset ────────────────────────────────────────────
         else:
             print("No local data found. Downloading full history...")
-
             prices = self._download_full_history(ticker)
-
             if prices.empty:
                 print("No data returned from Yahoo Finance.")
             else:
@@ -317,23 +299,17 @@ class DataManager:
                 changed = True
                 print(f"Saved {len(prices)} rows.")
 
-        # ====================================================
-        # SAVE ASSET INFO
-        # ====================================================
-
+        # ── Save asset info ──────────────────────────────────────
         if not info_path.exists():
             try:
-                info = yf.Ticker(ticker).info
+                info    = yf.Ticker(ticker).info
                 info_df = pd.DataFrame([info])
                 info_df.to_parquet(info_path)
                 print("Asset info saved.")
             except Exception as e:
                 print(f"Info download failed: {e}")
 
-        # ====================================================
-        # INVALIDATE FORECASTS ONLY IF DATA CHANGED
-        # ====================================================
-
+        # ── Invalidate forecasts if data changed ─────────────────
         if changed:
             self.invalidate_forecasts(ticker)
 
@@ -345,7 +321,6 @@ class DataManager:
 
     def update_tickers(self, tickers: list[str]) -> list[str]:
         changed_tickers = []
-
         for ticker in tickers:
             try:
                 _, changed = self.update_ticker(ticker)
@@ -367,14 +342,11 @@ class DataManager:
     # ========================================================
 
     def load_prices(self, tickers: list[str]) -> pd.DataFrame:
-        """
-        Historical prices only. Do not touch this for now.
-        """
+        """Historical prices only."""
         all_prices = []
 
         for ticker in tickers:
             path = PRICE_DIR / f"{ticker}.parquet"
-
             if not path.exists():
                 print(f"Missing local data: {ticker}")
                 continue
@@ -383,16 +355,14 @@ class DataManager:
             if df.empty or "Close" not in df.columns:
                 continue
 
-            series = df["Close"].copy()
-            series.name = ticker
+            series       = df["Close"].copy()
+            series.name  = ticker
             series.index = pd.to_datetime(series.index).tz_localize(None)
-
             all_prices.append(series)
 
         if not all_prices:
             return pd.DataFrame()
 
-        combined = pd.concat(all_prices, axis=1).sort_index()
+        combined       = pd.concat(all_prices, axis=1).sort_index()
         combined.index = pd.to_datetime(combined.index).tz_localize(None)
-
         return combined

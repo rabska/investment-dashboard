@@ -13,39 +13,39 @@ from sklearn.preprocessing import StandardScaler
 # COLORS
 # ============================================================
 
-COLOR_PALETTE = [
-    (173, 216, 230),  # light blue
-    (0, 191, 255),    # deep sky blue
-    (0, 0, 255),      # blue
-    (72, 61, 139),    # dark slate blue
-    (123, 104, 238),  # medium purple
-    (128, 0, 128),    # purple
-    (218, 112, 214),  # orchid
-    (255, 0, 255),    # magenta
-    (255, 20, 147),   # deep pink
-    (176, 48, 96),    # muted crimson
-    (220, 20, 60),    # crimson
-    (240, 128, 128),  # light coral
-    (255, 69, 0),     # orange red
-    (255, 165, 0),    # orange
-    (244, 164, 96),   # sandy brown
-    (240, 230, 140),  # khaki
-    (128, 128, 0),    # olive
-    (255, 255, 0),    # yellow
-    (154, 205, 50),   # yellow green
-    (124, 252, 0),    # lawn green
-    (143, 188, 143),  # dark sea green
-    (34, 139, 34),    # forest green
-    (0, 255, 127),    # spring green
-    (0, 255, 255),    # cyan
-    (0, 139, 139),    # dark cyan
-    (128, 128, 128),  # gray
-    (139, 69, 19),    # saddle brown
-    (0, 0, 139),      # dark blue
-    (30, 144, 255),   # dodger blue
-    (138, 43, 226),   # blue violet
-    (144, 238, 144),  # light green
-]
+COLOR_PALETTE = np.array([
+    [173, 216, 230],  # light blue (soft sky / calm baseline)
+    [0, 191, 255],    # deep sky blue (liquidity / growth)
+    [30, 144, 255],   # dodger blue (equities momentum)
+    [0, 0, 255],      # pure blue (core market / SPY-like reference)
+    [0, 0, 139],      # dark blue (defensive equities / risk-off)
+    [72, 61, 139],    # dark slate blue (stability layer)
+    [123, 104, 238],  # medium purple (balanced risk)
+    [138, 43, 226],   # blue violet (growth + volatility)
+    [128, 0, 128],    # purple (speculative assets)
+    [218, 112, 214],  # orchid (high volatility / alternatives)
+    [255, 0, 255],    # magenta (quant / leveraged exposure)
+    [255, 20, 147],   # deep pink (aggressive growth)
+    [176, 48, 96],    # muted crimson (risk / drawdowns)
+    [220, 20, 60],    # crimson (market stress / equities drawdown)
+    [240, 128, 128],  # light coral (soft risk exposure)
+    [255, 69, 0],     # orange red (commodities / inflation shock)
+    [255, 165, 0],    # orange (energy / cyclicals)
+    [244, 164, 96],   # sandy brown (real assets / REITs)
+    [240, 230, 140],  # khaki (defensive macro / bonds proxy)
+    [128, 128, 0],    # olive (macro hedge / commodities blend)
+    [139, 69, 19],    # saddle brown (real estate / hard assets)
+    [255, 255, 0],    # yellow (inflation / risk alert)
+    [154, 205, 50],   # yellow green (TIPS / inflation protection)
+    [124, 252, 0],    # lawn green (growth / dividends)
+    [144, 238, 144],  # light green (stable equity income)
+    [143, 188, 143],  # dark sea green (defensive equities)
+    [34, 139, 34],    # forest green (dividend growth core)
+    [0, 255, 127],    # spring green (momentum / risk-on)
+    [0, 255, 255],    # cyan (liquidity / bonds inverse signal)
+    [0, 139, 139],    # dark cyan (fixed income / hedge layer)
+    [128, 128, 128],  # gray (neutral / cash equivalent)
+])
 
 # Table highlight colours
 # BLUE_STD  = meets the academic/industry standard threshold (deep blue)
@@ -259,16 +259,16 @@ DATA_DIR = Path(r"D:\0Storage\bachelors\investment-dashboard\data")
 FORECAST_ROOT = DATA_DIR / "forecast_prices"
 FORECAST_DIRS = {
     "3mo": FORECAST_ROOT / "3mo",
-    "1y":  FORECAST_ROOT / "1y",
+    "1mo": FORECAST_ROOT / "1mo",
 }
 INFO_DIR = DATA_DIR / "asset_info"
 
-VALID_FORECAST_MODES = {"none", "3mo", "1y"}
+VALID_FORECAST_MODES = {"none", "1mo", "3mo"}
 
 
 def _forecast_path(ticker: str, forecast_mode: str) -> Path:
     if forecast_mode not in FORECAST_DIRS:
-        raise ValueError("forecast_mode must be 'none', '3mo', or '1y'")
+        raise ValueError("forecast_mode must be 'none', '1mo', or '3mo'")
     return FORECAST_DIRS[forecast_mode] / f"{ticker}.parquet"
 
 
@@ -320,7 +320,7 @@ def _merge_prices_with_forecast(
     forecast_mode: str,
 ) -> pd.DataFrame:
 
-    if forecast_mode not in {"3mo", "1y"}:
+    if forecast_mode not in {"1mo", "3mo"}:
         return prices_df.copy()
 
     merged = {}
@@ -358,13 +358,33 @@ def _effective_year_range_for_forecast(
     prices_df: pd.DataFrame,
     forecast_mode: str,
 ) -> list[int]:
+    """
+    Extend the year range to include the forecast window.
 
-    if forecast_mode not in {"3mo", "1y"}:
+    Both horizons (1mo = 21 days, 3mo = 63 days) end within the same
+    calendar year as the last real data point, so we extend the end year
+    by +1 only when the forecast window crosses a year boundary.
+    """
+    if forecast_mode not in {"1mo", "3mo"}:
         return selected_years
+
+    from forecast import HORIZONS
+    import pandas as _pd
 
     _, real_max_year = _year_bounds(prices_df)
     start_year = min(selected_years[0], real_max_year)
-    return [start_year, real_max_year + 1]
+
+    # Find the actual last forecast date to determine whether we cross
+    # into the next calendar year
+    real_last = _real_last_date(prices_df)
+    pred_len  = HORIZONS.get(forecast_mode, 63)
+    if real_last is not None:
+        last_forecast_date = real_last + _pd.offsets.BDay(pred_len)
+        end_year = max(real_max_year, last_forecast_date.year)
+    else:
+        end_year = real_max_year + 1
+
+    return [start_year, end_year]
 
 
 def _real_last_date(prices_df: pd.DataFrame) -> pd.Timestamp | None:
@@ -412,11 +432,16 @@ TRADING_DAYS = 252
 BENCHMARK = "SPY"
 BEAR_THRESHOLD = -0.01                # daily return < -1 % = "bear day"
 CVAR_ALPHA = 0.05                     # 5 % tail
-ROLLING_CORR_WINDOW = 63             # ~3 months for rolling corr stability
 
 
 def _daily_returns(prices_df: pd.DataFrame) -> pd.DataFrame:
-    return prices_df.pct_change().dropna()
+    """
+    Per-column pct_change without global dropna.
+    NaNs are left in place so that a gap in one asset does NOT truncate
+    the full history of all other assets.  Each metric function is
+    responsible for dropping NaNs from its own slice.
+    """
+    return prices_df.pct_change()
 
 
 def _annualized_return(ret: pd.Series) -> float:
@@ -433,40 +458,46 @@ def _annualized_vol(ret: pd.Series) -> float:
 
 def calc_sortino(ret: pd.Series) -> float:
     """
-    Sortino Ratio = (Ann. Return − Rf) / Downside Deviation.
+    Classic Sortino Ratio.
 
-    Downside deviation uses only returns below the daily risk-free hurdle,
-    annualised by √252.  The correct formula squares the *excess* shortfall
-    (r - rf when r < rf), not the raw return squared.
+    Sortino = (Annualized Return − Rf) / Annualized Downside Deviation
+
+    rf_daily  = (1 + rf_annual)^(1/252) − 1
+    excess_t  = r_t − rf_daily
+    downside_t = min(excess_t, 0)          # zero for days above hurdle
+    Downside Deviation = sqrt(mean(downside_t²)) × sqrt(252)
+
+    All days (not just negative days) enter the mean, which is the correct
+    semi-deviation denominator (Sortino & van der Meer, 1991).
     """
-    ann_ret = _annualized_return(ret)
-    rf_daily = RISK_FREE_RATE_ANNUAL / TRADING_DAYS
-    shortfall = ret - rf_daily
-    downside = shortfall[shortfall < 0]
-    if downside.empty:
+    r = ret.dropna()
+    n = len(r)
+    if n < 2:
         return np.nan
-    # Semi-deviation: sqrt of mean squared shortfall, then annualise
+    ann_ret  = _annualized_return(r)
+    rf_daily = (1.0 + RISK_FREE_RATE_ANNUAL) ** (1.0 / TRADING_DAYS) - 1.0
+    excess   = r - rf_daily
+    downside = np.minimum(excess, 0.0)          # clip positives to zero
     downside_dev = float(np.sqrt((downside ** 2).mean()) * np.sqrt(TRADING_DAYS))
     if downside_dev == 0:
         return np.nan
-    return (ann_ret - RISK_FREE_RATE_ANNUAL) / downside_dev
+    return float((ann_ret - RISK_FREE_RATE_ANNUAL) / downside_dev)
 
 
 def calc_upside_capture(ret: pd.Series, bench: pd.Series) -> float:
     """
-    Upside Capture Ratio (UCR).
-    Mean daily return of the asset on benchmark up-days divided by the mean
-    daily return of the benchmark on those same days.
-    UCR > 1: asset amplifies benchmark gains (higher participation).
-    UCR < 1: asset lags the benchmark on up-days.
-
-    Note: the mean-based form is equivalent to the standard period-return ratio
-    for short windows and is numerically stable across all window lengths.
+    Upside Capture Ratio = mean(r_asset | r_SPY > 0) / mean(r_SPY | r_SPY > 0).
+    Alignment and NaN removal are done per-pair.
     """
     common = ret.index.intersection(bench.index)
     if common.empty:
         return np.nan
-    r, b = ret.loc[common], bench.loc[common]
+    r = ret.loc[common].dropna()
+    b = bench.loc[common].dropna()
+    common2 = r.index.intersection(b.index)
+    if common2.empty:
+        return np.nan
+    r, b = r.loc[common2], b.loc[common2]
     up_mask = b > 0
     if up_mask.sum() == 0:
         return np.nan
@@ -478,16 +509,18 @@ def calc_upside_capture(ret: pd.Series, bench: pd.Series) -> float:
 
 def calc_downside_capture(ret: pd.Series, bench: pd.Series) -> float:
     """
-    Downside Capture Ratio (DCR).
-    Mean daily return of the asset on benchmark down-days divided by the mean
-    daily return of the benchmark on those same days.
-    DCR < 1: asset loses less than the benchmark on down-days (good hedge quality).
-    DCR > 1: asset falls more than the benchmark on down-days.
+    Downside Capture Ratio = mean(r_asset | r_SPY < 0) / mean(r_SPY | r_SPY < 0).
+    Alignment and NaN removal are done per-pair.
     """
     common = ret.index.intersection(bench.index)
     if common.empty:
         return np.nan
-    r, b = ret.loc[common], bench.loc[common]
+    r = ret.loc[common].dropna()
+    b = bench.loc[common].dropna()
+    common2 = r.index.intersection(b.index)
+    if common2.empty:
+        return np.nan
+    r, b = r.loc[common2], b.loc[common2]
     down_mask = b < 0
     if down_mask.sum() == 0:
         return np.nan
@@ -498,11 +531,19 @@ def calc_downside_capture(ret: pd.Series, bench: pd.Series) -> float:
 
 
 def calc_beta(ret: pd.Series, bench: pd.Series) -> float:
-    """OLS Beta vs benchmark."""
+    """
+    OLS Beta = Cov(r_asset, r_SPY) / Var(r_SPY).
+    Asset and SPY are aligned by common dates; NaNs removed per-pair.
+    """
     common = ret.index.intersection(bench.index)
-    if len(common) < 30:
+    if common.empty:
         return np.nan
-    r, b = ret.loc[common], bench.loc[common]
+    r = ret.loc[common].dropna()
+    b = bench.loc[common].dropna()
+    common2 = r.index.intersection(b.index)
+    if len(common2) < 30:
+        return np.nan
+    r, b = r.loc[common2], b.loc[common2]
     cov = np.cov(r, b)
     bench_var = cov[1, 1]
     if bench_var == 0:
@@ -511,70 +552,82 @@ def calc_beta(ret: pd.Series, bench: pd.Series) -> float:
 
 
 def calc_bear_correlation(ret: pd.Series, bench: pd.Series) -> float:
-    """Pearson correlation restricted to bear market days (bench < threshold)."""
+    """
+    Bear-Day Corr: Pearson correlation on days when r_SPY < -1%.
+    Alignment and NaN removal per-pair.
+    """
     common = ret.index.intersection(bench.index)
     if common.empty:
         return np.nan
-    r, b = ret.loc[common], bench.loc[common]
+    r = ret.loc[common].dropna()
+    b = bench.loc[common].dropna()
+    common2 = r.index.intersection(b.index)
+    if common2.empty:
+        return np.nan
+    r, b = r.loc[common2], b.loc[common2]
     bear_mask = b < BEAR_THRESHOLD
     if bear_mask.sum() < 10:
         return np.nan
     return float(r[bear_mask].corr(b[bear_mask]))
 
 
-def calc_cvar(ret: pd.Series, alpha: float = CVAR_ALPHA) -> float:
-    """
-    CVaR / Expected Shortfall at the alpha level, annualised.
-
-    CVaR is the mean of daily returns in the left alpha-tail.
-    Annualisation: multiply the daily mean by TRADING_DAYS (simple scaling),
-    NOT by √TRADING_DAYS which is only correct for volatility (std dev).
-    Result is expressed as a fraction (e.g. −0.30 = −30 % annual ES).
-    """
-    if ret.empty:
-        return np.nan
-    threshold = ret.quantile(alpha)
-    tail = ret[ret <= threshold]
-    if tail.empty:
-        return np.nan
-    # Daily mean loss → annualise linearly (P&L scaling, not vol scaling)
-    return float(tail.mean() * TRADING_DAYS)
-
-
-def calc_incremental_cvar(
+def calc_portfolio_cvar_impact(
     ret: pd.Series,
     bench: pd.Series,
     alpha: float = CVAR_ALPHA,
 ) -> float:
     """
-    Incremental CVaR (Component CVaR delta).
-    Measures how adding this asset at a 50/50 blend changes the portfolio CVaR.
-    Negative = asset reduces tail risk of the benchmark portfolio.
+    50/50 Portfolio CVaR Impact.
 
-    Annualised the same way as calc_cvar (linear scaling).
+    Measures the change in CVaR when blending this asset 50/50 with SPY:
+        CVaR(0.5·r_asset + 0.5·r_SPY) − CVaR(r_SPY)
+
+    Negative = asset reduces the tail risk of the benchmark portfolio (good).
+    CVaR is the mean of daily returns in the left alpha-tail,
+    annualised by linear scaling (×252).
+    Alignment and NaN removal per-pair.
     """
     common = ret.index.intersection(bench.index)
-    if len(common) < 30:
+    if common.empty:
         return np.nan
-    r, b = ret.loc[common], bench.loc[common]
-    combined = 0.5 * r + 0.5 * b
-    cvar_combined = calc_cvar(combined, alpha)
-    cvar_bench = calc_cvar(b, alpha)
-    return float(cvar_combined - cvar_bench)
+    r = ret.loc[common].dropna()
+    b = bench.loc[common].dropna()
+    common2 = r.index.intersection(b.index)
+    if len(common2) < 30:
+        return np.nan
+    r, b = r.loc[common2], b.loc[common2]
+
+    def _cvar(s: pd.Series) -> float:
+        threshold = s.quantile(alpha)
+        tail = s[s <= threshold]
+        if tail.empty:
+            return np.nan
+        return float(tail.mean() * TRADING_DAYS)
+
+    return float(_cvar(0.5 * r + 0.5 * b) - _cvar(b))
 
 
 def calc_tail_dependence(ret: pd.Series, bench: pd.Series, alpha: float = CVAR_ALPHA) -> float:
     """
-    Empirical lower tail dependence coefficient λ_L:
-    P(X ≤ F_X^{-1}(α) | Y ≤ F_Y^{-1}(α)).
+    Empirical Tail Dependence:
+        P(r_asset ≤ q_asset,5% | r_SPY ≤ q_SPY,5%)
+
+    Shows how often the asset is also in its worst 5% days when SPY is in
+    its worst 5% days.  Lower = better for crisis diversification.
+    Alignment and NaN removal per-pair.
     """
     common = ret.index.intersection(bench.index)
-    if len(common) < 30:
+    if common.empty:
         return np.nan
-    r, b = ret.loc[common], bench.loc[common]
+    r = ret.loc[common].dropna()
+    b = bench.loc[common].dropna()
+    common2 = r.index.intersection(b.index)
+    if len(common2) < 30:
+        return np.nan
+    r, b = r.loc[common2], b.loc[common2]
     qr = r.quantile(alpha)
     qb = b.quantile(alpha)
-    both_tail = ((r <= qr) & (b <= qb)).sum()
+    both_tail  = ((r <= qr) & (b <= qb)).sum()
     bench_tail = (b <= qb).sum()
     if bench_tail == 0:
         return np.nan
@@ -582,127 +635,93 @@ def calc_tail_dependence(ret: pd.Series, bench: pd.Series, alpha: float = CVAR_A
 
 
 def calc_max_drawdown(ret: pd.Series) -> float:
-    """Maximum Drawdown from cumulative returns (expressed as a negative fraction)."""
-    cumulative = (1 + ret).cumprod()
-    running_max = cumulative.cummax()
-    drawdown = cumulative / running_max - 1
+    """
+    Maximum Drawdown via wealth index starting at 1.0.
+
+    W_t = ∏(1 + r_t)    (running product, W_0 = 1)
+    M_t = max(W_0, ..., W_t)
+    DD_t = W_t / M_t − 1
+    """
+    r = ret.dropna()
+    if len(r) < 2:
+        return np.nan
+    wealth      = (1 + r).cumprod()
+    running_max = wealth.cummax()
+    drawdown    = wealth / running_max - 1
     return float(drawdown.min())
-
-
-def calc_time_to_recovery(ret: pd.Series) -> float:
-    """
-    Longest continuous drawdown period measured in trading days.
-    Counts days where the cumulative return remains below its previous peak.
-    """
-    cumulative = (1 + ret).cumprod()
-    running_max = cumulative.cummax()
-    underwater = cumulative < running_max
-
-    if not underwater.any():
-        return 0.0
-
-    max_span = 0
-    span = 0
-    for uw in underwater:
-        if uw:
-            span += 1
-            max_span = max(max_span, span)
-        else:
-            span = 0
-    return float(max_span)
 
 
 def calc_calmar(ret: pd.Series) -> float:
     """Calmar Ratio = Annualized Return / |Max Drawdown|."""
-    ann_ret = _annualized_return(ret)
-    mdd = calc_max_drawdown(ret)
-    if mdd == 0 or np.isnan(mdd):
+    r   = ret.dropna()
+    ann_ret = _annualized_return(r)
+    mdd     = calc_max_drawdown(r)
+    if np.isnan(mdd) or mdd == 0:
         return np.nan
     return float(ann_ret / abs(mdd))
 
 
-def calc_jensen_alpha(ret: pd.Series, bench: pd.Series) -> float:
-    """
-    Jensen's Alpha (annualised):
-    α = E[R_i] − [Rf + β·(E[R_m] − Rf)]
-    """
-    common = ret.index.intersection(bench.index)
-    if len(common) < 30:
-        return np.nan
-    r, b = ret.loc[common], bench.loc[common]
-    beta = calc_beta(r, b)
-    if np.isnan(beta):
-        return np.nan
-    ann_r = _annualized_return(r)
-    ann_b = _annualized_return(b)
-    return float(ann_r - (RISK_FREE_RATE_ANNUAL + beta * (ann_b - RISK_FREE_RATE_ANNUAL)))
-
-
 def calc_correlation(ret: pd.Series, bench: pd.Series) -> float:
-    """Plain Pearson correlation with benchmark."""
+    """Plain Pearson correlation with benchmark. NaN removal per-pair."""
     common = ret.index.intersection(bench.index)
-    if len(common) < 10:
+    if common.empty:
         return np.nan
-    return float(ret.loc[common].corr(bench.loc[common]))
-
-
-def calc_rolling_corr_stability(
-    ret: pd.Series,
-    bench: pd.Series,
-    window: int = ROLLING_CORR_WINDOW,
-) -> float:
-    """
-    Rolling Correlation Stability = 1 − std(rolling_corr).
-    Higher = more stable (less regime-switching).
-    """
-    common = ret.index.intersection(bench.index)
-    if len(common) < window + 10:
+    r = ret.loc[common].dropna()
+    b = bench.loc[common].dropna()
+    common2 = r.index.intersection(b.index)
+    if len(common2) < 10:
         return np.nan
-    r, b = ret.loc[common], bench.loc[common]
-    rolling = r.rolling(window).corr(b).dropna()
-    if rolling.empty:
-        return np.nan
-    return float(1.0 - rolling.std())
+    return float(r.loc[common2].corr(b.loc[common2]))
 
 
 def compute_all_indicators(prices_df: pd.DataFrame, tickers: list[str]) -> pd.DataFrame:
     """
     Compute all quantitative indicators for every ticker.
+
+    _daily_returns() returns per-column pct_change WITHOUT global dropna so
+    that a gap in one asset does not shorten other assets' history.
+    Each metric function receives a per-asset or per-pair slice and applies
+    its own dropna.
+
     Returns a DataFrame indexed by ticker.
     """
-    rets = _daily_returns(prices_df)
-    bench_ret = rets[BENCHMARK] if BENCHMARK in rets.columns else None
+    all_rets  = _daily_returns(prices_df)
+    bench_raw = all_rets[BENCHMARK] if BENCHMARK in all_rets.columns else None
 
     rows = []
     for ticker in tickers:
-        if ticker not in rets.columns:
+        if ticker not in all_rets.columns:
             continue
-        r = rets[ticker].dropna()
+
+        r = all_rets[ticker]   # keep NaNs; each function handles its own dropna
+        b = bench_raw          # same: may contain NaNs
 
         row = {"Ticker": ticker}
 
-        row["Sortino"]                = calc_sortino(r)
-        row["Upside Capture"]         = calc_upside_capture(r, bench_ret) if bench_ret is not None else np.nan
-        row["Downside Capture"]       = calc_downside_capture(r, bench_ret) if bench_ret is not None else np.nan
-        row["Beta"]                   = calc_beta(r, bench_ret) if bench_ret is not None else np.nan
-        row["Bear Corr"]              = calc_bear_correlation(r, bench_ret) if bench_ret is not None else np.nan
-        row["CVaR (5%)"]              = calc_cvar(r)
-        row["Incr. CVaR"]             = calc_incremental_cvar(r, bench_ret) if bench_ret is not None else np.nan
-        row["Tail Dep."]              = calc_tail_dependence(r, bench_ret) if bench_ret is not None else np.nan
+        # ── Profitability & Risk-Adjusted Return ─────────────
+        row["Sortino"]     = calc_sortino(r)
+        row["Calmar"]      = calc_calmar(r)
+
+        # ── General Diversification & Market Risk ─────────────
+        row["Beta"]                   = calc_beta(r, b)           if b is not None else np.nan
+        row["Correlation"]            = calc_correlation(r, b)    if b is not None else np.nan
         row["Max Drawdown"]           = calc_max_drawdown(r)
-        row["Time to Recovery (d)"]   = calc_time_to_recovery(r)
-        row["Calmar"]                 = calc_calmar(r)
-        row["Jensen Alpha"]           = calc_jensen_alpha(r, bench_ret) if bench_ret is not None else np.nan
-        row["Correlation"]            = calc_correlation(r, bench_ret) if bench_ret is not None else np.nan
-        row["Rolling Corr Stability"] = calc_rolling_corr_stability(r, bench_ret) if bench_ret is not None else np.nan
+
+        # ── Bear-Market Selection ─────────────────────────────
+        row["Bear-Day Corr"]    = calc_bear_correlation(r, b)  if b is not None else np.nan
+        row["Upside Capture"]   = calc_upside_capture(r, b)   if b is not None else np.nan
+        row["Downside Capture"] = calc_downside_capture(r, b) if b is not None else np.nan
+
+        # ── Crisis & Tail Diversification ────────────────────
+        row["CVaR Impact"] = calc_portfolio_cvar_impact(r, b) if b is not None else np.nan
+        row["Tail Dependence"]   = calc_tail_dependence(r, b)       if b is not None else np.nan
 
         rows.append(row)
 
     if not rows:
         return pd.DataFrame()
 
-    result = pd.DataFrame(rows).set_index("Ticker")
-    return result
+    return pd.DataFrame(rows).set_index("Ticker")
 
 
 # ============================================================
@@ -714,155 +733,109 @@ def compute_all_indicators(prices_df: pd.DataFrame, tickers: list[str]) -> pd.Da
 def _classify_cell(
     col: str,
     val: float,
-    series: pd.Series,
     spy_val: float | None = None,
 ) -> str | None:
     """
     Return 'std', 'good', or None.
 
-    Rules:
-    ──────────────────────────────────────────────────────────────────
-    INFO columns (compared relative to SPY):
-      5Y Avg Return        good  if > SPY value
-      3M Return            good  if > SPY value
-      Beta 3Y              good  if < 0.5
+    std  = meets the academic/industry standard threshold (deep blue)
+    good = sufficiently good / better than SPY (light blue)
 
-    INDICATOR columns (absolute thresholds, some also relative to SPY):
-      Sortino              std   if > 1.0
-                           good  if > SPY value
-      Upside Capture       std   if > 1.0  (captures more upside than benchmark)
-                           good  if > 0.75
-      Downside Capture     std   if < 1.0  (loses less than benchmark on down-days)
-                           good  if < 1.25
-      Beta                 std   if < 0    (negative beta = hedge)
-                           good  if < 0.25
-      Bear Corr            std   if < 0    (negative corr in downturns = hedge)
-                           good  if < 0.25
-      CVaR (5%)            good  if better (less negative) than SPY
-      Incr. CVaR           std   if < 0    (reduces portfolio tail risk)
-                           good  if < 0.05 (5 % threshold – small positive still acceptable)
-      Tail Dep.            good  if < 0.25
-      Max Drawdown         good  if better (less negative) than SPY
-      Time to Recovery     good  if < SPY value (recovers faster)
-      Calmar               std   if > 1.0
-                           good  if > SPY value
-      Jensen Alpha         std   if > 0    (positive excess return vs CAPM)
-                           good  if > SPY alpha (trivially 0 for SPY itself)
-      Correlation          std   if < 0    (negative – genuine diversifier)
-                           good  if < 0.5
-      Rolling Corr Stab.   std   if > 0.75
-                           good  if > SPY value
+    ──────────────────────────────────────────────────────────────────
+    INFO columns:
+      5Y Avg Return   good  if > SPY value
+      Beta 3Y         good  if < 0.5
+
+    INDICATOR columns:
+      Sortino         std   if > 1.0
+                      good  if > SPY value
+      Calmar          std   if > 1.0
+                      good  if > SPY value
+
+      Beta            std   if < 0    (negative beta = hedge)
+                      good  if < 0.25
+      Correlation     std   if < 0    (genuine diversifier)
+                      good  if < 0.5
+      Max Drawdown    good  if better (less negative) than SPY
+
+      Bear-Day Corr   std   if < 0
+                      good  if < 0.25
+      Upside Capture  std   if > 1.0
+                      good  if > 0.75
+      Downside Capture
+                      std   if < 0.0  (moves opposite to SPY on down-days)
+                      good  if < 0.25
+
+      50/50 Portfolio CVaR Impact
+                      std   if < 0    (reduces tail risk)
+                      good  if < 0.05
+      Empirical Tail Dependence
+                      good  if < 0.25
     ──────────────────────────────────────────────────────────────────
     """
     if val is None or (isinstance(val, float) and np.isnan(val)):
         return None
 
-    # Helper: is the asset's value better than SPY's?
-    def better_than_spy_lower(threshold: float | None) -> bool:
-        """Lower is better: asset < spy_val."""
-        return threshold is not None and not np.isnan(threshold) and val < threshold
+    def _better_lower(ref: float | None) -> bool:
+        return ref is not None and not np.isnan(ref) and val < ref
 
-    def better_than_spy_higher(threshold: float | None) -> bool:
-        """Higher is better: asset > spy_val."""
-        return threshold is not None and not np.isnan(threshold) and val > threshold
+    def _better_higher(ref: float | None) -> bool:
+        return ref is not None and not np.isnan(ref) and val > ref
 
-    # ── INFO columns ─────────────────────────────────────────────
-    if col in ("5Y Avg Return", "3M Return"):
-        if better_than_spy_higher(spy_val):
-            return "good"
-        return None
+    # ── INFO ─────────────────────────────────────────────────────
+    if col == "5Y Avg Return":
+        return "std" if _better_higher(spy_val) else None
 
     if col == "Beta 3Y":
-        if val < 0.5:
-            return "good"
-        return None
+        return "good" if val < 0.5 else None
 
-    # ── INDICATOR columns ─────────────────────────────────────────
+    # ── Profitability & Risk-Adjusted Return ─────────────────────
     if col == "Sortino":
         if val > 1.0:
             return "std"
-        if better_than_spy_higher(spy_val):
-            return "good"
-        return None
-
-    if col == "Upside Capture":
-        if val > 1.0:
-            return "std"
-        if val > 0.75:
-            return "good"
-        return None
-
-    if col == "Downside Capture":
-        if val < 0.0:
-            return "std"
-        if val < 0.25:
-            return "good"
-        return None
-
-    if col == "Beta":
-        if val < 0:
-            return "std"
-        if val < 0.25:
-            return "good"
-        return None
-
-    if col == "Bear Corr":
-        if val < 0:
-            return "std"
-        if val < 0.25:
-            return "good"
-        return None
-
-    if col == "CVaR (5%)":
-        if better_than_spy_higher(spy_val):   # CVaR is negative; closer to 0 = better
-            return "good"
-        return None
-
-    if col == "Incr. CVaR":
-        if val < 0:
-            return "std"
-        if val < 0.05:
-            return "good"
-        return None
-
-    if col == "Tail Dep.":
-        if val < 0.25:
-            return "good"
-        return None
-
-    if col == "Max Drawdown":
-        if better_than_spy_higher(spy_val):   # drawdown is negative; closer to 0 = better
-            return "good"
-        return None
-
-    if col == "Time to Recovery (d)":
-        if better_than_spy_lower(spy_val):
-            return "good"
-        return None
+        return "good" if _better_higher(spy_val) else None
 
     if col == "Calmar":
         if val > 1.0:
             return "std"
-        if better_than_spy_higher(spy_val):
-            return "good"
-        return None
+        return "good" if _better_higher(spy_val) else None
 
-    if col == "Jensen Alpha":
-        if val > 0:
+    # ── General Diversification & Market Risk ────────────────────
+    if col == "Beta":
+        if val < 0:
             return "std"
-        return None
+        return "good" if val < 0.25 else None
 
     if col == "Correlation":
         if val < 0:
             return "std"
-        if val < 0.5:
-            return "good"
-        return None
+        return "good" if val < 0.5 else None
 
-    if col == "Rolling Corr Stability":
-        if val > 0.75:
-            return "good"
-        return None
+    if col == "Max Drawdown":
+        return "good" if _better_higher(spy_val) else None   # closer to 0 = better
+
+    # ── Bear-Market Selection ─────────────────────────────────────
+    if col == "Bear-Day Corr":
+        if val < 0:
+            return "std"
+        return "good" if val < 0.25 else None
+
+    if col == "Upside Capture":
+        if val > 1.0:
+            return "std"
+        return "good" if val > 0.75 else None
+
+    if col == "Downside Capture":
+        if val < 0.0:
+            return "std"
+        return "good" if val < 0.25 else None
+
+    # ── Crisis & Tail Diversification ────────────────────────────
+    if col == "CVaR Impact":
+        return "good" if val > 0 else None
+
+    if col == "Tail Dependence":
+        return "good" if val < 0.25 else None
 
     return None
 
@@ -875,35 +848,56 @@ def _build_info_table_rows(
     tickers: list[str],
     indicators_df: pd.DataFrame,
     info_map: dict[str, dict],
+    forecast_mode: str = "none",
 ) -> list[html.Tr]:
-    """Build all <tr> rows for the combined asset info + indicators table."""
+    """
+    Build all <tr> rows for the combined asset info + indicators table.
 
+    Column groups (rendered as a top header row with colspans):
+      YFinance / Dataset              : Ticker, Short Name, Category, 5Y Avg Return, Beta 3Y
+      Bear-Market Selection           : Bear-Day Corr, Upside Capture, Downside Capture
+      Crisis & Tail Diversification   : 50/50 Portfolio CVaR Impact, Empirical Tail Dependence
+      Profitability & Risk-Adjusted   : Sortino, Calmar
+    """
+
+    # ── Column definitions ───────────────────────────────────────
+    # INFO_COLS: (display_label, yfinance_key)
     INFO_COLS = [
         ("Short Name",    "shortName"),
         ("Category",      "category"),
         ("5Y Avg Return", "fiveYearAverageReturn"),
-        ("3M Return",     "trailingThreeMonthReturns"),
         ("Beta 3Y",       "beta3Year"),
     ]
 
+    # INDICATOR_COLS in display order (matches group order below)
     INDICATOR_COLS = [
-        "Sortino",
+        # General Diversification & Market Risk
+        "Beta",
+        "Correlation",
+        "Max Drawdown",
+        # Bear-Market Selection
+        "Bear-Day Corr",
         "Upside Capture",
         "Downside Capture",
-        "Beta",
-        "Bear Corr",
-        "CVaR (5%)",
-        "Incr. CVaR",
-        "Tail Dep.",
-        "Max Drawdown",
-        "Time to Recovery (d)",
+        # Crisis & Tail Diversification
+        "CVaR Impact",
+        "Tail Dependence",
+        # Profitability & Risk-Adjusted Return
+        "Sortino",
         "Calmar",
-        "Jensen Alpha",
-        "Correlation",
-        "Rolling Corr Stability",
     ]
 
-    # ── Pre-extract SPY values for relative comparisons ──────────
+    # Group header definitions: (label, colspan)
+    # Ticker col is sticky and belongs to the first group.
+    GROUPS = [
+        ("YFinance",                   1 + len(INFO_COLS)),   # Ticker + 4 info cols
+        ("General diversification", 3),
+        ("Bear-Market",                 3),
+        ("Crisis",         2),
+        ("Profitability",  2),
+    ]
+
+    # ── Pre-extract SPY reference values ────────────────────────
     spy_indicator_vals: dict[str, float] = {}
     if BENCHMARK in indicators_df.index:
         for col in INDICATOR_COLS:
@@ -924,7 +918,24 @@ def _build_info_table_rows(
         except (TypeError, ValueError):
             spy_info_vals[key] = np.nan
 
-    # ── Header row ───────────────────────────────────────────────
+    # ── Shared style atoms ───────────────────────────────────────
+    th_group_style = {
+        "padding": "6px 14px",
+        "whiteSpace": "nowrap",
+        "textAlign": "center",
+        "fontSize": "11px",
+        "fontWeight": "700",
+        "letterSpacing": "0.04em",
+        "textTransform": "uppercase",
+        "color": "#CBD5E1",
+        "backgroundColor": "#0F172A",
+        "borderBottom": "1px solid #1E293B",
+        "borderRight": "1px solid #334155",
+        "position": "sticky",
+        "top": "0",
+        "zIndex": "2",
+    }
+
     th_style = {
         "padding": "10px 14px",
         "whiteSpace": "nowrap",
@@ -935,24 +946,65 @@ def _build_info_table_rows(
         "backgroundColor": "#1E293B",
         "borderBottom": "2px solid #334155",
         "position": "sticky",
-        "top": "0",
+        "top": "29px",   # pushed below the group header row
         "zIndex": "2",
     }
 
-    th_ticker = dict(th_style, **{
+    th_ticker_group = dict(th_group_style, **{
         "textAlign": "left",
         "position": "sticky",
         "left": "0",
         "zIndex": "3",
     })
 
-    header_cells = [html.Th("Ticker", style=th_ticker)]
-    for label, _ in INFO_COLS:
-        header_cells.append(html.Th(label, style=th_style))
-    for col in INDICATOR_COLS:
-        header_cells.append(html.Th(col, style=th_style))
+    th_ticker = dict(th_style, **{
+        "textAlign": "left",
+        "position": "sticky",
+        "left": "0",
+        "top": "29px",
+        "zIndex": "3",
+    })
 
-    rows = [html.Tr(header_cells)]
+    # ── Group header row ─────────────────────────────────────────
+    group_cells = []
+    for i, (label, span) in enumerate(GROUPS):
+        style = dict(th_ticker_group if i == 0 else th_group_style)
+        style["borderRight"] = "2px solid #334155"
+        group_cells.append(html.Th(label, colSpan=span, style=style))
+
+    group_row = html.Tr(group_cells)
+
+    # ── Column header row ────────────────────────────────────────
+    # Track which columns end a group so we can add a visual separator
+    GROUP_LAST_COLS = {
+        # last col index (0-based) in each group, counting from left:
+        # group 0 ends at col index = len(INFO_COLS)  (Ticker + INFO_COLS)
+        # group 1 ends at col index = len(INFO_COLS) + 4 - 1
+        # etc.
+        len(INFO_COLS): True,                       # end of YFinance group
+        len(INFO_COLS) + 3: True,                   # end of General Diversification
+        len(INFO_COLS) + 3 + 3: True,               # end of Bear-Market
+        len(INFO_COLS) + 3 + 3 + 2: True,           # end of Crisis & Tail
+    }
+
+    header_cells = [html.Th("Ticker", style=th_ticker)]
+    for idx, (label, _) in enumerate(INFO_COLS):
+        s = dict(th_style)
+        col_pos = idx + 1   # 0 = Ticker
+        if col_pos in GROUP_LAST_COLS:
+            s["borderRight"] = "2px solid #334155"
+        header_cells.append(html.Th(label, style=s))
+
+    for idx, col in enumerate(INDICATOR_COLS):
+        s = dict(th_style)
+        col_pos = len(INFO_COLS) + 1 + idx
+        if col_pos in GROUP_LAST_COLS:
+            s["borderRight"] = "2px solid #334155"
+        header_cells.append(html.Th(col, style=s))
+
+    header_row = html.Tr(header_cells)
+
+    rows = [group_row, header_row]
 
     # ── Data rows ────────────────────────────────────────────────
     td_base = {
@@ -965,15 +1017,21 @@ def _build_info_table_rows(
         "backgroundColor": "white",
     }
 
+    # Group separator right-border positions (same col_pos logic)
+    GROUP_SEP = set(GROUP_LAST_COLS.keys())
+
     for i, ticker in enumerate(tickers):
         row_bg = "white" if i % 2 == 0 else "#F8FAFC"
-        info = info_map.get(ticker, {})
-
-        cells = []
+        info   = info_map.get(ticker, {})
+        cells  = []
 
         # Ticker cell (sticky left)
+        badge = {"1mo": " ᶠ¹", "3mo": " ᶠ³"}.get(forecast_mode, "")
+        tip   = (f"Metrics include {forecast_mode} PatchTST forecast data"
+                 if forecast_mode != "none" else ticker)
         cells.append(html.Td(
-            ticker,
+            f"{ticker}{badge}",
+            title=tip,
             style={
                 **td_base,
                 "backgroundColor": "#1E293B",
@@ -983,79 +1041,92 @@ def _build_info_table_rows(
                 "position": "sticky",
                 "left": "0",
                 "zIndex": "1",
+                "borderRight": "2px solid #334155",
             },
         ))
 
         # INFO columns
-        for _, key in INFO_COLS:
+        for col_offset, (_, key) in enumerate(INFO_COLS):
+            col_pos = col_offset + 1
+
             raw = info.get(key, None)
             if raw is None or (isinstance(raw, float) and np.isnan(raw)):
-                display = "—"
+                display  = "—"
                 cell_val = np.nan
-            elif key in ("fiveYearAverageReturn", "trailingThreeMonthReturns"):
+            elif key == "fiveYearAverageReturn":
                 try:
                     cell_val = float(raw)
-                    display = f"{cell_val * 100:.2f}%"
+                    display  = f"{cell_val * 100:.2f}%"
                 except Exception:
-                    display = str(raw)
-                    cell_val = np.nan
+                    display, cell_val = str(raw), np.nan
             elif key == "beta3Year":
                 try:
                     cell_val = float(raw)
-                    display = f"{cell_val:.3f}"
+                    display  = f"{cell_val:.3f}"
                 except Exception:
-                    display = str(raw)
-                    cell_val = np.nan
+                    display, cell_val = str(raw), np.nan
             else:
-                display = str(raw)
-                cell_val = np.nan
+                display, cell_val = str(raw), np.nan
 
-            # Classify INFO cells
-            if key in ("fiveYearAverageReturn", "trailingThreeMonthReturns"):
+            # Classify
+            if key == "fiveYearAverageReturn":
                 spy_ref = spy_info_vals.get(key, np.nan)
-                col_label = "5Y Avg Return" if key == "fiveYearAverageReturn" else "3M Return"
-                tier = _classify_cell(col_label, cell_val, pd.Series(dtype=float), spy_val=spy_ref)
+                tier = _classify_cell("5Y Avg Return", cell_val, spy_ref)
             elif key == "beta3Year":
-                tier = _classify_cell("Beta 3Y", cell_val, pd.Series(dtype=float))
+                tier = _classify_cell("Beta 3Y", cell_val)
             else:
                 tier = None
 
+            sep = "2px solid #334155" if col_pos in GROUP_SEP else None
+
             if tier == "std":
-                cell_style = {**td_base, "backgroundColor": BLUE_STD, "color": TEXT_STD, "fontWeight": "700"}
+                cell_style = {**td_base, "backgroundColor": BLUE_STD,
+                              "color": TEXT_STD, "fontWeight": "700"}
             elif tier == "good":
-                cell_style = {**td_base, "backgroundColor": BLUE_GOOD, "color": TEXT_GOOD, "fontWeight": "600"}
+                cell_style = {**td_base, "backgroundColor": BLUE_GOOD,
+                              "color": TEXT_GOOD, "fontWeight": "600"}
             else:
                 cell_style = {**td_base, "backgroundColor": row_bg}
+
+            if sep:
+                cell_style = {**cell_style, "borderRight": sep}
 
             cells.append(html.Td(display, style=cell_style))
 
         # INDICATOR columns
-        for col in INDICATOR_COLS:
-            if col in indicators_df.columns and ticker in indicators_df.index:
-                val = indicators_df.loc[ticker, col]
-            else:
-                val = np.nan
+        for col_offset, col in enumerate(INDICATOR_COLS):
+            col_pos = len(INFO_COLS) + 1 + col_offset
+
+            val = (indicators_df.loc[ticker, col]
+                   if col in indicators_df.columns and ticker in indicators_df.index
+                   else np.nan)
 
             spy_ref = spy_indicator_vals.get(col, np.nan)
-            tier = _classify_cell(col, val, pd.Series(dtype=float), spy_val=spy_ref)
+            tier = _classify_cell(col, val, spy_ref)
 
-            # Format display value
-            if col in ("CVaR (5%)", "Incr. CVaR", "Max Drawdown"):
-                display = _fmt(val, pct=True) if not np.isnan(val) else "—"
+            # Format display
+            is_nan = isinstance(val, float) and np.isnan(val)
+            if col in ("Max Drawdown", "CVaR Impact"):
+                display = _fmt(val, pct=True) if not is_nan else "—"
             elif col in ("Upside Capture", "Downside Capture", "Correlation",
-                         "Bear Corr", "Tail Dep.", "Rolling Corr Stability"):
-                display = _fmt(val, decimals=3) if not np.isnan(val) else "—"
-            elif col == "Time to Recovery (d)":
-                display = f"{int(val)}d" if not np.isnan(val) else "—"
+                         "Bear-Day Corr", "Tail Dependence"):
+                display = _fmt(val, decimals=3) if not is_nan else "—"
             else:
-                display = _fmt(val, decimals=3) if not np.isnan(val) else "—"
+                display = _fmt(val, decimals=3) if not is_nan else "—"
+
+            sep = "2px solid #334155" if col_pos in GROUP_SEP else None
 
             if tier == "std":
-                cell_style = {**td_base, "backgroundColor": BLUE_STD, "color": TEXT_STD, "fontWeight": "700"}
+                cell_style = {**td_base, "backgroundColor": BLUE_STD,
+                              "color": TEXT_STD, "fontWeight": "700"}
             elif tier == "good":
-                cell_style = {**td_base, "backgroundColor": BLUE_GOOD, "color": TEXT_GOOD, "fontWeight": "600"}
+                cell_style = {**td_base, "backgroundColor": BLUE_GOOD,
+                              "color": TEXT_GOOD, "fontWeight": "600"}
             else:
                 cell_style = {**td_base, "backgroundColor": row_bg}
+
+            if sep:
+                cell_style = {**cell_style, "borderRight": sep}
 
             cells.append(html.Td(display, style=cell_style))
 
@@ -1064,11 +1135,20 @@ def _build_info_table_rows(
     return rows
 
 
-def build_asset_table(tickers: list[str], prices_df: pd.DataFrame) -> html.Div:
-    """Return the full scrollable table block."""
+def build_asset_table(
+    tickers: list[str],
+    prices_df: pd.DataFrame,
+    forecast_mode: str = "none",
+) -> html.Div:
+    """
+    Return the full scrollable metrics table.
+    prices_df may be historical-only or historical+forecast merged.
+    When a forecast is active the metrics reflect the predicted period.
+    """
     indicators_df = compute_all_indicators(prices_df, tickers)
-    info_map = {t: _load_asset_info(t) for t in tickers}
-    table_rows = _build_info_table_rows(tickers, indicators_df, info_map)
+    info_map      = {t: _load_asset_info(t) for t in tickers}
+    table_rows    = _build_info_table_rows(tickers, indicators_df, info_map,
+                                           forecast_mode)
 
     legend_style = {
         "display": "inline-flex",
@@ -1098,12 +1178,19 @@ def build_asset_table(tickers: list[str], prices_df: pd.DataFrame) -> html.Div:
         [
             html.Div(
                 [
-                    html.Span("Asset Overview & Diversification Metrics", style={
-                        "fontSize": "16px",
-                        "fontWeight": "700",
-                        "color": "#1E293B",
-                        "marginRight": "24px",
-                    }),
+                    html.Span(
+                        "Asset Overview & Diversification Metrics"
+                        + {
+                            "1mo": "  ·  Metrics include 1-month PatchTST forecast",
+                            "3mo": "  ·  Metrics include 3-month PatchTST forecast",
+                        }.get(forecast_mode, ""),
+                        style={
+                            "fontSize": "16px",
+                            "fontWeight": "700",
+                            "color": "#1E293B",
+                            "marginRight": "24px",
+                        },
+                    ),
                     html.Span(
                         [html.Span(style=swatch_std), " Meets metric standard"],
                         style=legend_style,
@@ -1181,49 +1268,27 @@ def build_indexed_price_figure(
         if s.empty:
             continue
 
-        # Split into real and forecast segments if a cutoff date is provided
-        if real_cutoff_date is not None:
-            real_s = s[s.index <= real_cutoff_date]
-            fore_s = s[s.index > real_cutoff_date]
-        else:
-            real_s = s
-            fore_s = pd.Series(dtype=float)
-
-        # Real segment
+        # Single continuous solid trace — historical and forecast as one line
         fig.add_trace(go.Scatter(
-            x=real_s.index,
-            y=real_s.values,
+            x=s.index,
+            y=s.values,
             mode="lines",
             name=asset,
             line=dict(color=colors[i], width=2),
             legendgroup=asset,
         ))
 
-        # Forecast segment (dashed, same colour, no duplicate legend entry)
-        if not fore_s.empty:
-            # Stitch last real point to start of forecast for visual continuity
-            stitch_x = list(real_s.index[-1:]) + list(fore_s.index)
-            stitch_y = list(real_s.values[-1:]) + list(fore_s.values)
-            fig.add_trace(go.Scatter(
-                x=stitch_x,
-                y=stitch_y,
-                mode="lines",
-                name=asset,
-                line=dict(color=colors[i], width=2, dash="dash"),
-                legendgroup=asset,
-                showlegend=False,
-            ))
-
-    # Vertical line at real/forecast boundary
+    # Subtle vertical marker at the real/forecast boundary
     if real_cutoff_date is not None and not indexed.empty:
         fig.add_vline(
             x=real_cutoff_date.timestamp() * 1000,
             line_dash="dot",
-            line_color="rgba(0,0,0,0.35)",
-            line_width=1.5,
-            annotation_text="Forecast →",
-            annotation_position="top right",
-            annotation_font_size=11,
+            line_color="rgba(0,0,0,0.25)",
+            line_width=1.2,
+            annotation_text="← Historical  |  Forecast →",
+            annotation_position="top",
+            annotation_font_size=10,
+            annotation_font_color="rgba(0,0,0,0.45)",
         )
 
     fig.update_layout(
@@ -1536,6 +1601,7 @@ def build_layout(
     tickers: list[str],
     prices_df: pd.DataFrame,
     initial_figures: dict[str, go.Figure],
+    initial_table: "html.Div | None" = None,
 ) -> html.Div:
     min_year, max_year = _year_bounds(prices_df)
     default_years = _default_year_range(prices_df)
@@ -1639,7 +1705,7 @@ def build_layout(
                                         "Quick regimes",
                                         style={"fontWeight": "600", "color": "#111827"},
                                     ),
-                                    html.Button("Dot-com crash (1999–2003)",   id="btn-dotcom",         n_clicks=0, style=btn_style),
+                                    html.Button("2001 Dot-com crash",   id="btn-dotcom",         n_clicks=0, style=btn_style),
                                     html.Button("2008 Financial Crisis",        id="btn-crisis-2008",    n_clicks=0, style=btn_style),
                                     html.Button("2020 COVID shock",            id="btn-covid",          n_clicks=0, style=btn_style),
                                     html.Button("2022 Rate shock",             id="btn-rate-shock-2022", n_clicks=0, style=btn_style),
@@ -1656,7 +1722,7 @@ def build_layout(
                                     ),
                                     html.Button("No forecast", id="btn-forecast-none", n_clicks=0, style=btn_style),
                                     html.Button("3 months",    id="btn-forecast-3mo",  n_clicks=0, style=btn_style),
-                                    html.Button("1 year",      id="btn-forecast-1y",   n_clicks=0, style=btn_style),
+                                    html.Button("1 month",     id="btn-forecast-1mo",  n_clicks=0, style=btn_style),
                                 ],
                                 style={"marginTop": "12px"},
                             ),
@@ -1697,21 +1763,8 @@ def build_layout(
                         style=section_style,
                     ),
 
-                    html.Button(
-                        "Refresh",
-                        id="refresh-button",
-                        n_clicks=0,
-                        style={
-                            "width": "100%",
-                            "padding": "11px 14px",
-                            "border": "none",
-                            "borderRadius": "12px",
-                            "backgroundColor": "#2563EB",
-                            "color": "white",
-                            "fontWeight": "600",
-                            "cursor": "pointer",
-                        },
-                    ),
+                    # No Refresh button — all controls are reactive
+
                 ],
                 style=sidebar_style,
             ),
@@ -1722,7 +1775,9 @@ def build_layout(
                 children=[
                     html.Div(
                         id="asset-table-container",
-                        children=build_asset_table(tickers, prices_df),
+                        children=(initial_table
+                              if initial_table is not None
+                              else build_asset_table(tickers, prices_df)),
                     ),
 
                     dcc.Loading(type="circle", color="#2563EB", children=html.Div(
@@ -1785,14 +1840,14 @@ def create_app(prices_df: pd.DataFrame, tickers: list[str]) -> Dash:
     min_year, max_year = _year_bounds(prices_df)
     default_years = _default_year_range(prices_df)
 
-    def _build_all_figures(
+    def _resolve_display_data(
         selected_assets: list[str],
         selected_years: list[int],
         forecast_mode: str,
-    ) -> dict[str, go.Figure]:
-        """Central figure-building function used by initial load and all callbacks."""
-        if forecast_mode in {"3mo", "1y"}:
-            display_prices_df = _merge_prices_with_forecast(
+    ) -> tuple:
+        """Returns (display_prices_df, display_years, cutoff_date)."""
+        if forecast_mode in {"1mo", "3mo"}:
+            display_df    = _merge_prices_with_forecast(
                 prices_df=prices_df,
                 selected_assets=selected_assets,
                 forecast_mode=forecast_mode,
@@ -1804,9 +1859,20 @@ def create_app(prices_df: pd.DataFrame, tickers: list[str]) -> Dash:
             )
             cutoff = _real_last_date(prices_df)
         else:
-            display_prices_df = prices_df
+            display_df    = prices_df
             display_years = selected_years
-            cutoff = None
+            cutoff        = None
+        return display_df, display_years, cutoff
+
+    def _build_all_figures(
+        selected_assets: list[str],
+        selected_years: list[int],
+        forecast_mode: str,
+    ) -> dict[str, go.Figure]:
+        """Central figure-building function used by initial load and all callbacks."""
+        display_prices_df, display_years, cutoff = _resolve_display_data(
+            selected_assets, selected_years, forecast_mode
+        )
 
         return {
             "indexed_price": build_indexed_price_figure(
@@ -1842,10 +1908,11 @@ def create_app(prices_df: pd.DataFrame, tickers: list[str]) -> Dash:
         }
 
     initial_figures = _build_all_figures(tickers, default_years, "none")
+    initial_table   = build_asset_table(tickers, prices_df, forecast_mode="none")
 
     app = Dash(__name__)
     app.title = "ETF Diversification DSS"
-    app.layout = build_layout(tickers, prices_df, initial_figures)
+    app.layout = build_layout(tickers, prices_df, initial_figures, initial_table)
 
     # ========================================================
     # QUICK REGIMES
@@ -1888,11 +1955,11 @@ def create_app(prices_df: pd.DataFrame, tickers: list[str]) -> Dash:
         Output("year-range", "value"),
         Input("btn-forecast-none", "n_clicks"),
         Input("btn-forecast-3mo",  "n_clicks"),
-        Input("btn-forecast-1y",   "n_clicks"),
+        Input("btn-forecast-1mo",  "n_clicks"),
         State("year-range", "value"),
         prevent_initial_call=True,
     )
-    def set_forecast_mode(n_none, n_3mo, n_1y, current_years):
+    def set_forecast_mode(n_none, n_1mo, n_3mo, current_years):
         triggered = callback_context.triggered
         if not triggered:
             return "none", current_years
@@ -1906,14 +1973,26 @@ def create_app(prices_df: pd.DataFrame, tickers: list[str]) -> Dash:
         start_year, end_year = _clamp_year_range(current_years, min_year, max_year + 1)
         start_year = min(start_year, real_max_year)
 
+        # Compute the actual last forecast date to avoid hardcoding +1 year
+        from forecast import HORIZONS as _H
+        import pandas as _pd2
+        real_last_dt = _real_last_date(prices_df)
+
+        def _forecast_end_year(mode: str) -> int:
+            pl = _H.get(mode, 63)
+            if real_last_dt is not None:
+                return max(real_max_year,
+                           (real_last_dt + _pd2.offsets.BDay(pl)).year)
+            return real_max_year + 1
+
         if trigger_id == "btn-forecast-none":
             return "none", [start_year, min(end_year, real_max_year)]
 
         if trigger_id == "btn-forecast-3mo":
-            return "3mo", [start_year, real_max_year + 1]
+            return "3mo", [start_year, _forecast_end_year("3mo")]
 
-        if trigger_id == "btn-forecast-1y":
-            return "1y", [start_year, real_max_year + 1]
+        if trigger_id == "btn-forecast-1mo":
+            return "1mo", [start_year, _forecast_end_year("1mo")]
 
         return "none", current_years
 
@@ -1936,7 +2015,7 @@ def create_app(prices_df: pd.DataFrame, tickers: list[str]) -> Dash:
 
         start_year = min(start_year, real_max_year)
 
-        if forecast_mode in {"3mo", "1y"}:
+        if forecast_mode in {"1mo", "3mo"}:
             return [start_year, real_max_year + 1]
 
         if end_year > real_max_year:
@@ -1950,13 +2029,19 @@ def create_app(prices_df: pd.DataFrame, tickers: list[str]) -> Dash:
 
     @app.callback(
         Output("asset-table-container", "children"),
-        Input("refresh-button", "n_clicks"),
-        State("asset-selector", "value"),
+        Input("asset-selector", "value"),
+        Input("forecast-mode",  "data"),
+        Input("year-range",     "value"),
         prevent_initial_call=False,
     )
-    def update_asset_table(_, selected_assets):
+    def update_asset_table(selected_assets, forecast_mode, selected_years):
         active_tickers = selected_assets if selected_assets else tickers
-        return build_asset_table(active_tickers, prices_df)
+        if forecast_mode not in VALID_FORECAST_MODES:
+            forecast_mode = "none"
+        sy = (selected_years if selected_years and len(selected_years) == 2
+              else default_years)
+        display_df, _, _ = _resolve_display_data(active_tickers, sy, forecast_mode)
+        return build_asset_table(active_tickers, display_df, forecast_mode)
 
     # ========================================================
     # MAIN CHART REFRESH
@@ -1977,14 +2062,13 @@ def create_app(prices_df: pd.DataFrame, tickers: list[str]) -> Dash:
         Output("rolling-container", "style"),
         Output("drawdown-container", "style"),
         Output("rolling-vol-container", "style"),
-        Input("refresh-button", "n_clicks"),
-        Input("forecast-mode", "data"),      # FIX: was State → now Input
-        Input("year-range", "value"),        # FIX: was State → now Input
-        State("asset-selector", "value"),
-        State("visible-charts", "value"),
+        Input("asset-selector",  "value"),
+        Input("forecast-mode",   "data"),
+        Input("year-range",      "value"),
+        Input("visible-charts",  "value"),
         prevent_initial_call=False,
     )
-    def update_all_charts(_, forecast_mode, selected_years, selected_assets, visible_charts):
+    def update_all_charts(selected_assets, forecast_mode, selected_years, visible_charts):
         if not selected_assets:
             selected_assets = tickers
 
